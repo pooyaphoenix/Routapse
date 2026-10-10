@@ -123,6 +123,17 @@ function Lane({ route, mode, models, lit, onChange, onRemove, goConnections }) {
               {models.length > 0 && !route.model_id && <span className="nudge">Pick a model</span>}
             </div>
           )}
+          {!direct && models.length > 1 && (
+            <div className="chips" aria-label="Fallback model">
+              <span className="nudge">If it fails, try:</span>
+              {models.filter((m) => m.id !== route.model_id).map((m) => (
+                <button type="button" key={m.id} className={"chip" + (route.fallback_model_id === m.id ? " on" : "")}
+                  title={m.description} onClick={() => set("fallback_model_id", route.fallback_model_id === m.id ? null : m.id)}>
+                  {m.id}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {direct ? (

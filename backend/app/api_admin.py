@@ -60,7 +60,7 @@ def models_put(id: str, body: ModelDef):
 @api.delete("/models/{id}")
 def models_delete(id: str):
     used = [r["name"] for r in store.list("routers")
-            if any(x.get("model_id") == id for x in r.get("routes", []))]
+            if any(id in (x.get("model_id"), x.get("fallback_model_id")) for x in r.get("routes", []))]
     if used:
         raise HTTPException(409, f"still used by router(s): {', '.join(used)}")
     store.delete("models", id)
@@ -78,11 +78,23 @@ def routers_put(id: str, body: RouterDef):
     if body.id != id:
         raise HTTPException(400, "id in path and body differ")
     labels = [r.label for r in body.routes]
+    if not labels:
+        raise HTTPException(400, "router must have at least one route")
     if len(set(labels)) != len(labels):
         raise HTTPException(400, "route labels must be unique")
+    if body.fallback_label and body.fallback_label not in labels:
+        raise HTTPException(400, f"fallback points at unknown lane '{body.fallback_label}'")
     for r in body.routes:
-        if r.action == "forward" and r.model_id and not store.get("models", r.model_id):
+        if r.action == "forward" and not r.model_id:
+            raise HTTPException(400, f"route '{r.label}' must have a target model")
+        if r.action == "forward" and not store.get("models", r.model_id):
             raise HTTPException(400, f"route '{r.label}': model '{r.model_id}' does not exist")
+        if r.fallback_model_id and r.fallback_model_id == r.model_id:
+            raise HTTPException(400, f"route '{r.label}': fallback model must differ from the target model")
+        if r.fallback_model_id and not store.get("models", r.fallback_model_id):
+            raise HTTPException(400, f"route '{r.label}': fallback model '{r.fallback_model_id}' does not exist")
+    if body.router_model != "laya" and (body.signals or body.rules):
+        raise HTTPException(400, "signals and rules require the Laya router model")
     names = {x.name for x in body.signals}
     for rule in body.rules:
         if rule.signal not in names:

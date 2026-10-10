@@ -11,6 +11,7 @@ class Settings:
     ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
     log_dir = os.getenv("LOG_DIR", "logs")
     log_bodies = os.getenv("LOG_BODIES", "true").lower() != "false"
+    log_retention_days = int(os.getenv("LOG_RETENTION_DAYS", "0") or 0)  # 0 keeps every file
 
 
 settings = Settings()

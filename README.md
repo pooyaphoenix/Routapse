@@ -177,7 +177,7 @@ force a lane or preview where a prompt would go, keep multi-turn chats, and save
 **Logs.** Every request and response is appended to `requests-YYYY-MM-DD.jsonl` (in Docker, the `logs` volume at
 `/logs`). Each line holds the source, router, request, routing decision, signals, target model, response, token
 usage, status and latency. The Logs page filters by router, source and text. Set `LOG_BODIES=false` to log metadata
-only. Logs contain prompts and answers and are not deleted automatically.
+only. Logs contain prompts and answers and are kept until you set `LOG_RETENTION_DAYS`.
 
 ## API
 
@@ -206,6 +206,7 @@ Everything is set through environment variables (copy [`.env.example`](.env.exam
 | `INSTALL_LAYA` | `0` | Build arg: install the `laya` package into the router image. |
 | `JEV_URL`, `JEV_MODEL`, `JEV_KIND` | | Where Jev is served. |
 | `LOG_DIR`, `LOG_BODIES` | `logs`, `true` | Log location, and whether to log prompt and response text. |
+| `LOG_RETENTION_DAYS` | `0` | Delete daily log files older than this many days. `0` keeps everything. |
 
 All options: **[docs/configuration.md](docs/configuration.md)**.
 
@@ -233,12 +234,15 @@ routapse/
 
 ## Limitations
 
-- Streaming is wire-compatible but not token by token: the full answer arrives as one SSE chunk.
+- Streaming forwards tokens as providers produce them, but is not verified against live providers (tests use
+  recorded-style SSE fixtures). Token usage is reported only if the provider sends it.
 - Tool calls, images and other non-text message parts are not forwarded.
 - Laya's `score` signal is assumed to return a number, and a `choice` without a reported confidence counts as
   confidence 1.0. Use *Route only* in the router editor to check what your Laya version returns.
 - API keys are stored in plaintext in the store. Keep Redis private and put TLS in front of the services.
-- There is no automated test suite yet. Tests are a welcome contribution.
+- Tests cover the routing engine, provider adapters, gateway/admin API and router sidecar. Run them with
+  `cd backend && STORE_URL=file:///tmp/s.json LOG_DIR=/tmp/l python -m unittest discover -s tests -t .`
+  and `cd router && python -m unittest discover -s tests -t .`. Real Laya/Jev and provider calls are not tested.
 
 ## Contributing
 

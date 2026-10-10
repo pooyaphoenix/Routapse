@@ -16,6 +16,7 @@ reads it for build options and passes it to the containers.
 | `OLLAMA_URL` | `http://host.docker.internal:11434` | backend | Default Ollama address for discovery and Ollama providers. |
 | `LOG_DIR` | `logs` (Compose: `/logs`) | backend | Directory for `requests-YYYY-MM-DD.jsonl`. |
 | `LOG_BODIES` | `true` | backend | `false` logs metadata only, with no prompt or response text. |
+| `LOG_RETENTION_DAYS` | `0` | backend | Delete daily log files older than this many days (checked at most hourly per process). `0` keeps every file. |
 
 ## Router sidecar
 
@@ -52,5 +53,5 @@ Without Docker, set `OLLAMA_URL=http://localhost:11434`.
 
 - **Config store.** Provider API keys are stored in plaintext in Redis (or the JSON file). Keep it private.
 - **Logs.** With `LOG_BODIES=true`, logs contain prompts and responses. Authorization headers and API keys are never
-  logged. Old daily files are not deleted automatically.
+  logged. Old daily files are kept unless `LOG_RETENTION_DAYS` is set.
 - **Redis keys** use the prefix `routapse:`.

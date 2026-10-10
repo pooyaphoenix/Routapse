@@ -1,21 +1,41 @@
 """Config store. Redis for multi-replica deployments, JSON file for a single node."""
-import json, os, threading
+import copy, json, os, threading
 from urllib.parse import urlparse
 
 from .config import settings
 
 
 class FileStore:
+    """JSON file store. Reads reuse the parsed file until its identity on disk changes, so edits made by
+    another process (or by hand) are picked up on the next call; writes always start from a fresh parse."""
+
     def __init__(self, path: str):
         self.path, self.lock = path, threading.Lock()
+        self._cache = None  # (path, signature, parsed)
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    def _load(self) -> dict:
+    def _read(self) -> dict:
         try:
             with open(self.path) as f:
                 return json.load(f)
         except FileNotFoundError:
             return {}
+
+    def _signature(self):
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            return None
+        return st.st_ino, st.st_mtime_ns, st.st_size
+
+    def _load(self) -> dict:
+        """Parsed contents for reading only; callers must not mutate it."""
+        sig, cached = self._signature(), self._cache
+        if cached and cached[0] == self.path and cached[1] == sig:
+            return cached[2]
+        data = self._read()
+        self._cache = (self.path, sig, data)
+        return data
 
     def _save(self, d: dict):
         tmp = self.path + ".tmp"
@@ -24,20 +44,20 @@ class FileStore:
         os.replace(tmp, self.path)
 
     def list(self, coll):
-        return list(self._load().get(coll, {}).values())
+        return copy.deepcopy(list(self._load().get(coll, {}).values()))
 
     def get(self, coll, id_):
-        return self._load().get(coll, {}).get(id_)
+        return copy.deepcopy(self._load().get(coll, {}).get(id_))
 
     def put(self, coll, id_, data):
         with self.lock:
-            d = self._load()
+            d = self._read()
             d.setdefault(coll, {})[id_] = data
             self._save(d)
 
     def delete(self, coll, id_):
         with self.lock:
-            d = self._load()
+            d = self._read()
             d.get(coll, {}).pop(id_, None)
             self._save(d)
 

@@ -31,7 +31,12 @@ The response is a standard chat completion plus:
 }
 ```
 
-`stream: true` returns valid SSE, but the whole answer arrives as one chunk.
+`stream: true` returns server-sent events with tokens forwarded as the provider produces them. The final
+chunk before `[DONE]` carries the routing decision in a `routapse` field. Lanes that reply directly send
+their fixed text as one chunk. Routing and provider connection errors that happen before the first token
+return a normal HTTP error (for example 502). If the provider fails midway, the stream ends with a
+`data: {"error": {...}}` event and no `[DONE]`. The request log is written when the stream ends, so a
+request abandoned by the client is logged with status `cancelled` and the text sent so far.
 
 ### `POST /v1/route/{router_id}`
 
@@ -47,7 +52,7 @@ Authentication: `Authorization: Bearer $ADMIN_TOKEN` when `ADMIN_TOKEN` is set.
 
 | Method and path | Purpose |
 |---|---|
-| `GET/PUT/DELETE /admin/providers[/{id}]` | Providers (`ollama`, `openai`, `openai_compat`, `anthropic`, `gemini`). Stored API keys are returned masked as `***`. |
+| `GET/PUT/DELETE /admin/providers[/{id}]` | Providers (`ollama`, `openai`, `openai_compat`, `anthropic`, `gemini`). Stored API keys are returned masked as `***`. `timeout` sets seconds per attempt (default 120, 1–600); `retries` sets extra attempts for transient network errors and 408, 429, and 5xx responses (default 2, 0–5). |
 | `GET/PUT/DELETE /admin/models[/{id}]` | Model aliases: provider, model name at the provider. |
 | `GET/PUT/DELETE /admin/routers[/{id}]` | Routers: lanes, signals, rules, fallback, minimum confidence. |
 | `GET/PUT/DELETE /admin/prompts[/{id}]` | Saved prompts for the prompt studio. |
@@ -77,6 +82,11 @@ Authentication: `Authorization: Bearer $ADMIN_TOKEN` when `ADMIN_TOKEN` is set.
 ```
 
 - `action`: `forward` (call `model_id`) or `respond` (return `response_text`).
+- `fallback_model_id` (optional): a different model tried when `model_id` still fails after the provider's
+  retries. Fallback happens only before any output is produced, so a stream that fails midway is never
+  restarted on another model. The response's `model` and the `X-Routapse-Model` header name the model that
+  answered, and the decision carries `fallback_from` and `fallback_reason`. If both models fail, the 502
+  message includes both errors. A model used as a fallback cannot be deleted.
 - `signals` and `rules` apply to `router_model: "laya"` only.
 - Rule `op`: `is` (text match), `gte`, `lte` (numeric).
 
@@ -86,4 +96,5 @@ One JSON object per line in `<LOG_DIR>/requests-YYYY-MM-DD.jsonl`:
 
 `id`, `ts`, `source` (`gateway`, `gateway-route`, `studio`, `test`), `router_id`, `requested_model`,
 `request` (messages, params), `decision`, `target_model`, `response` (text, usage), `status`, `error`,
-`latency_ms`, `client`.
+`latency_ms`, `client`. When a lane's fallback model answered: `fallback_from` and `fallback_reason`
+(streaming requests carry them in `decision`).

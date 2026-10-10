@@ -21,9 +21,8 @@ router falls back to a keyword heuristic.
 
 ## Good first contributions
 
-- **Tests.** There is no automated suite yet. Pure logic is the easiest start: rule matching and fallback in
-  `engine.py`, `parse_label` and `heuristic` in the router sidecar, the log reader.
-- **Token streaming** from OpenAI-compatible providers (the gateway currently sends one SSE chunk).
+- **More tests.** Suites live in `backend/tests` and `router/tests` (see the README for how to run them).
+  Missing coverage: real Laya and Jev responses, and the frontend.
 - **Tool calls and image parts** passed through to providers that support them.
 - **New provider adapters** in `providers.py`.
 

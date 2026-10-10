@@ -8,6 +8,8 @@ class Provider(BaseModel):
     kind: Literal["openai", "openai_compat", "ollama", "anthropic", "gemini"]
     base_url: str = ""
     api_key: str = ""
+    timeout: float = Field(120, gt=0, le=600)   # seconds per attempt
+    retries: int = Field(2, ge=0, le=5)         # extra attempts on timeouts, connection errors, 408/429/5xx
 
 
 class ModelDef(BaseModel):
@@ -23,6 +25,7 @@ class Route(BaseModel):
     examples: list[str] = []
     action: Literal["forward", "respond"] = "forward"
     model_id: str | None = None  # target when action == forward
+    fallback_model_id: str | None = None  # tried when model_id fails before producing any output
     system_prompt: str = ""      # agent persona / instructions injected on forward
     response_text: str = ""      # canned reply when action == respond
     color: str = "#2F6FDE"

@@ -2,7 +2,7 @@ export const COLORS = ["#2F6FDE", "#2E9E6B", "#E8A317", "#D1483A", "#7A4FD6", "#
 
 export const blankRoute = (i = 0) => ({
   label: `lane-${i + 1}`, description: "", examples: [], action: "forward",
-  model_id: null, system_prompt: "", response_text: "", color: COLORS[i % COLORS.length],
+  model_id: null, fallback_model_id: null, system_prompt: "", response_text: "", color: COLORS[i % COLORS.length],
 });
 
 const r = (i, o) => ({ ...blankRoute(i), ...o });

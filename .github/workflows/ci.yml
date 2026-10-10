@@ -17,6 +17,12 @@ jobs:
         run: pip install -r backend/requirements.txt -r router/requirements.txt
       - name: Compile
         run: python -m compileall -q backend router
+      - name: Backend tests
+        working-directory: backend
+        run: STORE_URL=file:///tmp/ci-test-store.json LOG_DIR=/tmp/ci-test-logs python -m unittest discover -s tests -t . -v
+      - name: Router sidecar tests
+        working-directory: router
+        run: python -m unittest discover -s tests -t . -v
       - name: Import both apps
         run: |
           (cd backend && ROLE=all STORE_URL=file:///tmp/ci-store.json LOG_DIR=/tmp/ci-logs \

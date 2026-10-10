@@ -84,22 +84,52 @@ def resolve_model(model_id: str) -> tuple[Provider, ModelDef]:
     return Provider(**p), md
 
 
-async def execute(route: Route, messages: list[dict], params: dict) -> dict:
-    if route.action == "respond":
-        return {"text": route.response_text, "model": None, "usage": {}}
-    if not route.model_id:
+def _provider_error(provider: Provider, e: httpx.HTTPError) -> HTTPException:
+    if isinstance(e, httpx.HTTPStatusError):
+        return HTTPException(502, f"{provider.kind} returned {e.response.status_code}: {e.response.text[:300]}")
+    return HTTPException(502, f"could not reach {provider.kind}: {type(e).__name__}")
+
+
+def _target(route: Route, messages: list[dict], model_id: str | None = None):
+    model_id = model_id or route.model_id
+    if not model_id:
         raise HTTPException(400, f"route '{route.label}' has no target model")
-    provider, md = resolve_model(route.model_id)
+    provider, md = resolve_model(model_id)
     msgs = list(messages)
     if route.system_prompt:
         msgs = [{"role": "system", "content": route.system_prompt}] + msgs
-    try:
-        text, usage = await providers.complete(provider, md.model_name, msgs, params)
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(502, f"{provider.kind} returned {e.response.status_code}: {e.response.text[:300]}")
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"could not reach {provider.kind}: {type(e).__name__}")
-    return {"text": text, "model": md.id, "usage": usage}
+    return provider, md, msgs
+
+
+def _candidates(route: Route) -> list[str | None]:
+    return [route.model_id] + ([route.fallback_model_id] if route.fallback_model_id else [])
+
+
+def _fallback_note(route: Route, primary_error: str | None) -> dict:
+    return {"fallback_from": route.model_id, "fallback_reason": primary_error} if primary_error else {}
+
+
+async def execute(route: Route, messages: list[dict], params: dict) -> dict:
+    if route.action == "respond":
+        return {"text": route.response_text, "model": None, "usage": {}}
+    primary_error = None
+    for i, model_id in enumerate(_candidates(route)):
+        try:
+            provider, md, msgs = _target(route, messages, model_id)
+        except HTTPException:
+            if i == 0:
+                raise
+            break  # a missing fallback must not hide the primary failure
+        try:
+            text, usage = await providers.complete(provider, md.model_name, msgs, params)
+        except httpx.HTTPError as e:
+            err = _provider_error(provider, e)
+            if i == len(_candidates(route)) - 1:
+                raise err if i == 0 else HTTPException(502, f"{primary_error}; fallback {md.id}: {err.detail}")
+            primary_error = err.detail
+            continue
+        return {"text": text, "model": md.id, "usage": usage, **_fallback_note(route, primary_error)}
+    raise HTTPException(502, primary_error)
 
 
 def public(d: dict) -> dict:
@@ -134,5 +164,86 @@ async def run(source: str, messages: list[dict], params: dict, router: RouterDef
         raise
     log_event({**ev, "decision": info, "status": "ok", "target_model": out["model"] if out else None,
                "response": {"text": out["text"], "usage": out["usage"]} if out else None,
+               **({k: out[k] for k in ("fallback_from", "fallback_reason") if k in out} if out else {}),
                "latency_ms": int((time.perf_counter() - t0) * 1000)})
     return info, out
+
+
+async def run_stream(source: str, messages: list[dict], params: dict, router: RouterDef | None = None,
+                     model_id: str | None = None, meta: dict | None = None):
+    """Streaming twin of run(). Returns (info, model, chunks) once the first chunk has arrived, so routing
+    and provider connection errors still become normal HTTP errors. The log line is written when the
+    stream ends, fails or is abandoned by the client."""
+    t0 = time.perf_counter()
+    ev = {"source": source, "router_id": router.id if router else None,
+          "requested_model": f"router:{router.id}" if router else model_id,
+          "request": {"messages": messages, "params": {k: v for k, v in params.items() if v is not None}},
+          **(meta or {})}
+
+    def finish(info, model, parts, usage, status, error=None):
+        log_event({**ev, "decision": info, "status": status, "target_model": model,
+                   "response": {"text": "".join(parts), "usage": usage},
+                   **({"error": error} if error else {}),
+                   "latency_ms": int((time.perf_counter() - t0) * 1000)})
+
+    info = provider = None
+    try:
+        if router:
+            d = await decide(router, messages)
+            route, info = d["route"], public(d)
+        else:
+            route = Route(label="direct", model_id=model_id)
+        if route.action == "respond":
+            model, source_iter, first = None, None, route.response_text
+            usage = {}
+        else:
+            primary_error = None
+            for i, candidate_id in enumerate(_candidates(route)):
+                provider, md, msgs = _target(route, messages, candidate_id)
+                usage = {}
+                source_iter = providers.stream(provider, md.model_name, msgs, params, usage)
+                try:
+                    first = await anext(source_iter, None)
+                except httpx.HTTPError as e:
+                    await source_iter.aclose()
+                    err = _provider_error(provider, e)
+                    if i == len(_candidates(route)) - 1:
+                        raise err if i == 0 else HTTPException(502, f"{primary_error}; fallback {md.id}: {err.detail}")
+                    primary_error = err.detail
+                    continue
+                model = md.id
+                if primary_error:
+                    info = {**(info or {}), **_fallback_note(route, primary_error)}
+                break
+    except Exception as e:  # noqa: BLE001 - log, then let FastAPI answer
+        if isinstance(e, httpx.HTTPError) and provider:
+            e = _provider_error(provider, e)
+        log_event({**ev, "decision": info, "status": "error",
+                   "error": str(getattr(e, "detail", None) or repr(e)),
+                   "latency_ms": int((time.perf_counter() - t0) * 1000)})
+        raise e
+
+    async def chunks():
+        parts, status, error = [], "cancelled", None
+        usage_out = {} if source_iter is None else usage
+        try:
+            if first:
+                parts.append(first)
+                yield first
+            if source_iter is not None:
+                async for text in source_iter:
+                    parts.append(text)
+                    yield text
+            status = "ok"
+        except httpx.HTTPError as e:
+            status, error = "error", _provider_error(provider, e).detail
+            raise
+        except Exception as e:  # noqa: BLE001
+            status, error = "error", repr(e)
+            raise
+        finally:
+            if source_iter is not None:
+                await source_iter.aclose()
+            finish(info, model, parts, usage_out, status, error)
+
+    return info, model, chunks()
