@@ -18,6 +18,7 @@ directly without calling a model at all. Models can be local (Ollama) or hosted 
 any OpenAI-compatible server).
 
 You describe the routing in plain language in a GUI, then call it through one OpenAI-compatible endpoint.
+> **Persian Documentation:** [مطالعه مستندات فارسی](README.fa.md)
 
 ## Why Routapse
 
